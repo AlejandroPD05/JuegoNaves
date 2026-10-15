@@ -88,6 +88,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
+            gap: 10px;
             width: 100%;
         }
 
@@ -107,6 +108,23 @@
             width: 140px;
             accent-color: #6be38a;
             cursor: pointer;
+        }
+
+        .mute-btn {
+            background: #12151a;
+            border: 1px solid #262b32;
+            border-radius: 999px;
+            padding: 10px 14px;
+            font-size: 1rem;
+            line-height: 1;
+            cursor: pointer;
+            transition: border-color 0.15s ease, color 0.15s ease;
+        }
+
+        .mute-btn:hover,
+        .mute-btn:focus-visible {
+            border-color: #6be38a;
+            color: #6be38a;
         }
 
         .touch-controls {
@@ -248,6 +266,7 @@
                     <li>&#8592; / &#8594; Girar</li>
                     <li>&#8593; Impulso</li>
                     <li>Espacio Disparar</li>
+                    <li>M Silenciar</li>
                 </ul>
                 <p class="overlay-pista">Pulsa ENTER o toca para jugar</p>
             </div>
@@ -267,6 +286,7 @@
                 <span>Volumen</span>
                 <input type="range" id="volumeSlider" min="0" max="100" value="100">
             </label>
+            <button class="mute-btn" id="muteBtn" type="button" aria-pressed="false" aria-label="Silenciar sonido">🔊</button>
         </div>
         <div class="touch-controls">
             <div class="touch-controls-left">
@@ -317,6 +337,25 @@
 
         var lienzo = document.getElementById("gameCanvas");
         var ctx = lienzo.getContext("2d");
+
+        // El juego piensa en coordenadas lógicas de 760x570; el buffer del canvas
+        // se amplía por devicePixelRatio para que no se vea borroso en pantallas
+        // Retina/HiDPI (el CSS ya se encarga del tamaño visible).
+        const ANCHO_JUEGO = 760;
+        const ALTO_JUEGO = 570;
+
+        function ajustarEscalaDPI() {
+            var dpr = Math.max(1, window.devicePixelRatio || 1);
+            lienzo.width = ANCHO_JUEGO * dpr;
+            lienzo.height = ALTO_JUEGO * dpr;
+            // setTransform reinicia con cada cambio de tamaño del buffer:
+            // hay que aplicarlo siempre después de asignar width/height.
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        }
+        ajustarEscalaDPI();
+        // devicePixelRatio cambia al hacer zoom en el navegador o mover la
+        // ventana a otra pantalla: se recalcula, la lógica no se entera.
+        window.addEventListener("resize", ajustarEscalaDPI);
 
         var estado = ESTADO_INICIO;
         var ultimaMarcaFrame = null; // timestamp del último frame (null = recalcular)
@@ -425,9 +464,54 @@
         var musica = new Music("sounds/music-low.m4a", "sounds/music-high.m4a");
         var todosLosSonidos = [fxExplosion, fxGolpe, fxLaser, fxEmpuje, musica];
 
+        var CLAVE_SILENCIO = "silencioJuego";
+        var botonSilencio = document.getElementById("muteBtn");
+        var silenciado = leerClaveLocal(CLAVE_SILENCIO) === "1";
+        var volumenAntesDeSilenciar = null;
+
+        function pintarBotonSilencio() {
+            botonSilencio.textContent = silenciado ? "🔇" : "🔊";
+            botonSilencio.setAttribute("aria-pressed", silenciado ? "true" : "false");
+            botonSilencio.setAttribute("aria-label", silenciado ? "Activar sonido" : "Silenciar sonido");
+        }
+
+        function aplicarSilencio() {
+            if (silenciado) {
+                // Se recuerda el volumen elegido para restaurarlo al reactivar.
+                if (volumenAntesDeSilenciar === null) {
+                    volumenAntesDeSilenciar = volumenGlobal;
+                }
+                volumenGlobal = 0;
+            } else if (volumenAntesDeSilenciar !== null) {
+                volumenGlobal = volumenAntesDeSilenciar;
+                volumenAntesDeSilenciar = null;
+            }
+            pintarBotonSilencio();
+            for (var i = 0; i < todosLosSonidos.length; i++) {
+                todosLosSonidos[i].actualizarVolumen();
+            }
+        }
+
+        function alternarSilencio() {
+            silenciado = !silenciado;
+            escribirClaveLocal(CLAVE_SILENCIO, silenciado ? "1" : "0");
+            aplicarSilencio();
+        }
+
+        botonSilencio.addEventListener("click", alternarSilencio);
+        pintarBotonSilencio();
+
         var sliderVolumen = document.getElementById("volumeSlider");
         sliderVolumen.value = Math.round(volumenGlobal * 100);
         sliderVolumen.addEventListener("input", function() {
+            // Mover el volumen con el silencio activo lo desactiva: la
+            // intención explícita del usuario manda sobre el botón.
+            if (silenciado) {
+                silenciado = false;
+                volumenAntesDeSilenciar = null;
+                escribirClaveLocal(CLAVE_SILENCIO, "0");
+                pintarBotonSilencio();
+            }
             volumenGlobal = sliderVolumen.value / 100;
             escribirClaveLocal(CLAVE_VOLUMEN, volumenGlobal);
             for (var i = 0; i < todosLosSonidos.length; i++) {
@@ -537,8 +621,8 @@
 
         function nuevaNave() {
             return {
-                x: lienzo.width / 2,
-                y: lienzo.height / 2,
+                x: ANCHO_JUEGO / 2,
+                y: ALTO_JUEGO / 2,
                 a: 90 / 180 * Math.PI,
                 r: TAM_NAVE / 2,
                 numParpadeos: Math.ceil(DUR_INV_NAVE / DUR_PARPADEO_NAVE),
@@ -560,8 +644,8 @@
             var x, y;
             for (var i = 0; i < AST_NUM + nivel; i++) {
                 do {
-                    x = Math.floor(Math.random() * lienzo.width);
-                    y = Math.floor(Math.random() * lienzo.height);
+                    x = Math.floor(Math.random() * ANCHO_JUEGO);
+                    y = Math.floor(Math.random() * ALTO_JUEGO);
                 } while (distanciaEntrePuntos(nave.x, nave.y, x, y) < AST_TAM * 2 + nave.r);
                 asteroides.push(nuevoAsteroide(x, y, Math.ceil(AST_TAM / 2)));
             }
@@ -666,6 +750,10 @@
                 }
                 return;
             }
+            if (ev.code === "KeyM") {
+                alternarSilencio();
+                return;
+            }
             if (estado !== ESTADO_JUGANDO || nave.muerta) {
                 return;
             }
@@ -757,7 +845,7 @@
             } else if (estado === ESTADO_INICIO) {
                 // Fondo quieto mientras espera a empezar
                 ctx.fillStyle = "black";
-                ctx.fillRect(0, 0, lienzo.width, lienzo.height);
+                ctx.fillRect(0, 0, ANCHO_JUEGO, ALTO_JUEGO);
             }
             // En pausa/fin el canvas se congela en el último fotograma
 
@@ -792,7 +880,7 @@
             musica.tick(escala);
 
             ctx.fillStyle = "black";
-            ctx.fillRect(0, 0, lienzo.width, lienzo.height);
+            ctx.fillRect(0, 0, ANCHO_JUEGO, ALTO_JUEGO);
 
             var a, r, x, y, desplazamientos, vert;
             for (var i = 0; i < asteroides.length; i++) {
@@ -936,7 +1024,7 @@
                 ctx.textBaseline = "middle";
                 ctx.fillStyle = "rgba(255, 255, 255, " + alfaTexto + ")";
                 ctx.font = "small-caps " + TAM_TEXTO + "px dejavu sans mono";
-                ctx.fillText(texto, lienzo.width / 2, lienzo.height * 0.75);
+                ctx.fillText(texto, ANCHO_JUEGO / 2, ALTO_JUEGO * 0.75);
                 alfaTexto -= (1.0 / TIEMPO_DESVANECIMIENTO_TEXTO / FPS) * escala;
             }
 
@@ -950,13 +1038,13 @@
             ctx.textBaseline = "middle";
             ctx.fillStyle = "white";
             ctx.font = TAM_TEXTO + "px dejavu sans mono";
-            ctx.fillText(puntuacion, lienzo.width - TAM_NAVE / 2, TAM_NAVE);
+            ctx.fillText(puntuacion, ANCHO_JUEGO - TAM_NAVE / 2, TAM_NAVE);
 
             ctx.textAlign = "center";
             ctx.textBaseline = "middle";
             ctx.fillStyle = "white";
             ctx.font = (TAM_TEXTO * 0.75) + "px dejavu sans mono";
-            ctx.fillText("MEJOR " + puntuacionAlta, lienzo.width / 2, TAM_NAVE);
+            ctx.fillText("MEJOR " + puntuacionAlta, ANCHO_JUEGO / 2, TAM_NAVE);
 
             var ax, ay, ar, lx, ly;
             for (var i = asteroides.length - 1; i >= 0; i--) {
@@ -1004,17 +1092,17 @@
 
             if (nave.x < nave.r) {
                 nave.x = nave.r;
-            } else if (nave.x > lienzo.width - nave.r) {
-                nave.x = lienzo.width - nave.r;
+            } else if (nave.x > ANCHO_JUEGO - nave.r) {
+                nave.x = ANCHO_JUEGO - nave.r;
             }
             if (nave.y < nave.r) {
                 nave.y = nave.r;
-            } else if (nave.y > lienzo.height - nave.r) {
-                nave.y = lienzo.height - nave.r;
+            } else if (nave.y > ALTO_JUEGO - nave.r) {
+                nave.y = ALTO_JUEGO - nave.r;
             }
 
             for (var i = nave.laseres.length - 1; i >= 0; i--) {
-                if (nave.laseres[i].dist > DIST_LASER * lienzo.width) {
+                if (nave.laseres[i].dist > DIST_LASER * ANCHO_JUEGO) {
                     nave.laseres.splice(i, 1);
                     continue;
                 }
@@ -1031,7 +1119,7 @@
                     nave.laseres[i].dist += Math.sqrt(Math.pow(nave.laseres[i].xv, 2) + Math.pow(nave.laseres[i].yv, 2)) * dt;
                 }
 
-                if (nave.laseres[i].x < 0 || nave.laseres[i].x > lienzo.width || nave.laseres[i].y < 0 || nave.laseres[i].y > lienzo.height) {
+                if (nave.laseres[i].x < 0 || nave.laseres[i].x > ANCHO_JUEGO || nave.laseres[i].y < 0 || nave.laseres[i].y > ALTO_JUEGO) {
                     nave.laseres.splice(i, 1);
                     continue;
                 }
@@ -1044,15 +1132,15 @@
                 if (asteroides[i].x < asteroides[i].r) {
                     asteroides[i].x = asteroides[i].r;
                     asteroides[i].xv = -asteroides[i].xv;
-                } else if (asteroides[i].x > lienzo.width - asteroides[i].r) {
-                    asteroides[i].x = lienzo.width - asteroides[i].r;
+                } else if (asteroides[i].x > ANCHO_JUEGO - asteroides[i].r) {
+                    asteroides[i].x = ANCHO_JUEGO - asteroides[i].r;
                     asteroides[i].xv = -asteroides[i].xv;
                 }
                 if (asteroides[i].y < asteroides[i].r) {
                     asteroides[i].y = asteroides[i].r;
                     asteroides[i].yv = -asteroides[i].yv;
-                } else if (asteroides[i].y > lienzo.height - asteroides[i].r) {
-                    asteroides[i].y = lienzo.height - asteroides[i].r;
+                } else if (asteroides[i].y > ALTO_JUEGO - asteroides[i].r) {
+                    asteroides[i].y = ALTO_JUEGO - asteroides[i].r;
                     asteroides[i].yv = -asteroides[i].yv;
                 }
             }

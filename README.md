@@ -13,6 +13,7 @@ Pages tal cual.
 | `←` / `→` | Girar la nave |
 | `↑` | Impulso |
 | `Espacio` | Disparar |
+| `M` | Silenciar / reactivar el sonido (o el botón 🔊) |
 
 En pantallas táctiles aparecen botones táctiles con `aria-label` solo cuando el
 dispositivo los necesita (`pointer: coarse`).
@@ -27,6 +28,9 @@ dispositivo los necesita (`pointer: coarse`).
 - Música que **acelera según el porcentaje de asteroides** que quedan
 - Efecto CRT (scanlines, viñeta, flicker) con `prefers-reduced-motion`
 - Slider de volumen persistido, con pool de hasta 5 sonidos simultáneos
+- Botón de silencio y tecla `M`, con persistencia en `localStorage`
+- Render nítido en pantallas HiDPI/Retina: el buffer del canvas se amplía por
+  `devicePixelRatio` sin tocar la lógica (coordenadas lógicas 760×570)
 - Spawn seguro: los asteroides nunca aparecen encima de la nave
 
 ## Arquitectura
