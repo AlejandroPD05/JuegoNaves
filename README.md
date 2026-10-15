@@ -21,6 +21,8 @@ dispositivo los necesita (`pointer: coarse`).
 
 - Niveles con dificultad creciente (+1 asteroide por nivel, +10 % de velocidad)
 - 3 vidas con invulnerabilidad parpadeante al reaparecer
+- Pantallas de estado: menú con controles visibles, pausa (`ESC` / `P`) y fin con reintento
+- Game loop con `requestAnimationFrame` y delta-time (física independiente de la tasa de refresco)
 - Récord persistido en `localStorage`
 - Música que **acelera según el porcentaje de asteroides** que quedan
 - Efecto CRT (scanlines, viñeta, flicker) con `prefers-reduced-motion`
@@ -29,8 +31,8 @@ dispositivo los necesita (`pointer: coarse`).
 
 ## Arquitectura
 
-Todo vive en `index.html`: CSS en `<head>` (líneas 1-169) y JS al final
-(constantes → audio → entrada → ciclo → render/colisiones).
+Todo vive en `index.html`: CSS en `<head>` y JS al final (constantes → audio →
+entrada → máquina de estados → ciclo rAF → render/colisiones).
 
 La decisión es deliberada: cero dependencias significa cero roturas, apertura
 instantánea y despliegue trivial. Dentro del fichero hay ~25 constantes
@@ -53,7 +55,7 @@ npx serve .
 
 ## Roadmap conocido
 
-- Game loop con `requestAnimationFrame` + delta-time (hoy es `setInterval` a 30 FPS)
-- Pantallas de estado reales (menú / pausa / game over con reintento)
+- ✓ Game loop con `requestAnimationFrame` + delta-time (antes `setInterval` a 30 FPS)
+- ✓ Pantallas de estado reales (inicio / pausa / fin con reintento) y controles visibles en el menú
 - Escalado HiDPI (`devicePixelRatio`) para pantallas Retina
-- Mute por teclado y controles visibles en pantalla
+- Mute por teclado

@@ -1,8 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="es">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="description" content="Clásico juego de Asteroids en canvas, sin dependencias: un único index.html con efecto CRT, música dinámica, controles táctiles y pantallas de estado (menú, pausa y fin del juego).">
+    <meta property="og:title" content="Asteroides - Alejandro Prieto Diez">
+    <meta property="og:description" content="Clásico juego de Asteroids en canvas, sin dependencias: efecto CRT, música dinámica y controles táctiles.">
+    <meta property="og:type" content="website">
     <title>Asteroides - Alejandro Prieto Diez</title>
     <style>
         html, body {
@@ -138,6 +142,66 @@
             background: #23292f;
         }
 
+        .overlay-estado {
+            position: absolute;
+            inset: 14px;
+            border-radius: 8px;
+            z-index: 2;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 16px;
+            padding: 20px;
+            box-sizing: border-box;
+            text-align: center;
+            background: rgba(0, 0, 0, 0.72);
+            color: #d7dde3;
+            font-family: 'Courier New', monospace;
+            opacity: 0;
+            visibility: hidden;
+            transition: opacity 0.2s ease;
+        }
+
+        .overlay-estado.visible {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        .overlay-estado h1,
+        .overlay-estado h2 {
+            margin: 0;
+            font-size: clamp(1.4rem, 5vw, 2.4rem);
+            letter-spacing: 0.3em;
+            text-transform: uppercase;
+            color: #6be38a;
+            text-shadow: 0 0 12px rgba(107, 227, 138, 0.6);
+        }
+
+        .overlay-estado p {
+            margin: 0;
+            font-size: clamp(0.85rem, 2.5vw, 1.05rem);
+            color: #9aa4af;
+        }
+
+        .overlay-controles {
+            list-style: none;
+            margin: 0;
+            padding: 0;
+            line-height: 1.9;
+            font-size: clamp(0.85rem, 2.5vw, 1.05rem);
+            color: #9aa4af;
+        }
+
+        .overlay-pista {
+            animation: parpadeoPista 1.2s infinite;
+        }
+
+        @keyframes parpadeoPista {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.25; }
+        }
+
         @media (pointer: coarse) {
             .touch-controls {
                 display: flex;
@@ -165,6 +229,10 @@
             .crt-overlay {
                 animation: none;
             }
+
+            .overlay-pista {
+                animation: none;
+            }
         }
     </style>
 </head>
@@ -173,6 +241,25 @@
         <div class="crt-frame">
             <canvas id="gameCanvas" width="760" height="570"></canvas>
             <div class="crt-overlay"></div>
+            <div class="overlay-estado" id="overlayInicio" role="status">
+                <h1>Asteroides</h1>
+                <ul class="overlay-controles">
+                    <li>&#8592; / &#8594; Girar</li>
+                    <li>&#8593; Impulso</li>
+                    <li>Espacio Disparar</li>
+                </ul>
+                <p class="overlay-pista">Pulsa ENTER o toca para jugar</p>
+            </div>
+            <div class="overlay-estado" id="overlayPausa" role="status">
+                <h2>Pausa</h2>
+                <p class="overlay-pista">Pulsa ESC o P para continuar</p>
+            </div>
+            <div class="overlay-estado" id="overlayFin" role="status">
+                <h2>Fin del juego</h2>
+                <p id="finPuntuacion">Puntuación: 0</p>
+                <p id="finRecord">Récord: 0</p>
+                <p class="overlay-pista">Pulsa ENTER o toca para jugar de nuevo</p>
+            </div>
         </div>
         <div class="controls-bar">
             <label class="volume-control">
@@ -221,12 +308,36 @@
         const TIEMPO_DESVANECIMIENTO_TEXTO = 2.5;
         const TAM_TEXTO = 40;
         const CLAVE_VOLUMEN = "volumenJuego";
+        const ESTADO_INICIO = "inicio";
+        const ESTADO_JUGANDO = "jugando";
+        const ESTADO_PAUSA = "pausa";
+        const ESTADO_FIN = "fin";
+        const DT_MAXIMO = 0.1; // segundos: clamp del delta-time entre frames
 
         var lienzo = document.getElementById("gameCanvas");
         var ctx = lienzo.getContext("2d");
 
+        var estado = ESTADO_INICIO;
+        var ultimaMarcaFrame = null; // timestamp del último frame (null = recalcular)
+
+        function leerClaveLocal(clave) {
+            try {
+                return localStorage.getItem(clave);
+            } catch (e) {
+                return null;
+            }
+        }
+
+        function escribirClaveLocal(clave, valor) {
+            try {
+                localStorage.setItem(clave, valor);
+            } catch (e) {
+                // Almacenamiento no disponible (modo privado, etc.): se omite
+            }
+        }
+
         var volumenGlobal = 1.0;
-        var volumenGuardado = localStorage.getItem(CLAVE_VOLUMEN);
+        var volumenGuardado = leerClaveLocal(CLAVE_VOLUMEN);
         if (volumenGuardado !== null) {
             volumenGlobal = parseFloat(volumenGuardado);
         }
@@ -246,7 +357,7 @@
             this.play = function() {
                 if (SONIDO_ENCENDIDO) {
                     this.numCorriente = (this.numCorriente + 1) % maxCorrientes;
-                    this.corrientes[this.numCorriente].play();
+                    this.corrientes[this.numCorriente].play().catch(() => {});
                 }
             }
 
@@ -274,24 +385,29 @@
             this.play = function() {
                 if (MUSICA_ENCENDIDA) {
                     if (this.bajo) {
-                        this.sonidoBajo.play();
+                        this.sonidoBajo.play().catch(() => {});
                     } else {
-                        this.sonidoAlto.play();
+                        this.sonidoAlto.play().catch(() => {});
                     }
                     this.bajo = !this.bajo;
                 }
+            }
+
+            this.pausar = function() {
+                this.sonidoBajo.pause();
+                this.sonidoAlto.pause();
             }
 
             this.establecerRelacionAsteroides = function(relacion) {
                 this.tempo = 1.0 - 0.75 * (1.0 - relacion);
             }
 
-            this.tick = function() {
-                if (this.tiempoLatido == 0) {
+            this.tick = function(escala) {
+                if (this.tiempoLatido <= 0) {
                     this.play();
-                    this.tiempoLatido = Math.ceil(this.tempo * FPS);
+                    this.tiempoLatido = this.tempo * FPS;
                 } else {
-                    this.tiempoLatido--;
+                    this.tiempoLatido -= escala;
                 }
             }
 
@@ -312,20 +428,24 @@
         sliderVolumen.value = Math.round(volumenGlobal * 100);
         sliderVolumen.addEventListener("input", function() {
             volumenGlobal = sliderVolumen.value / 100;
-            localStorage.setItem(CLAVE_VOLUMEN, volumenGlobal);
+            escribirClaveLocal(CLAVE_VOLUMEN, volumenGlobal);
             for (var i = 0; i < todosLosSonidos.length; i++) {
                 todosLosSonidos[i].actualizarVolumen();
             }
         });
 
         function tocarInicio(accion) {
-            if (nave.muerta) {
+            if (estado === ESTADO_INICIO || estado === ESTADO_FIN) {
+                juegoNuevo();
+                return;
+            }
+            if (estado !== ESTADO_JUGANDO || nave.muerta) {
                 return;
             }
             if (accion === "izquierda") {
-                nave.rot = VEL_GIRO_NAVE / 180 * Math.PI / FPS;
+                nave.rot = VEL_GIRO_NAVE / 180 * Math.PI;
             } else if (accion === "derecha") {
-                nave.rot = -VEL_GIRO_NAVE / 180 * Math.PI / FPS;
+                nave.rot = -VEL_GIRO_NAVE / 180 * Math.PI;
             } else if (accion === "impulso") {
                 nave.impulsando = true;
             } else if (accion === "disparo") {
@@ -334,6 +454,9 @@
         }
 
         function tocarFin(accion) {
+            if (estado !== ESTADO_JUGANDO || nave.muerta) {
+                return;
+            }
             if (accion === "izquierda" || accion === "derecha") {
                 nave.rot = 0;
             } else if (accion === "impulso") {
@@ -367,11 +490,23 @@
         vincularBotonTactil("btnThrust", "impulso");
         vincularBotonTactil("btnFire", "disparo");
 
+        // Tocar el canvas (o los overlays) inicia o reintenta la partida
+        lienzo.addEventListener("pointerdown", function() {
+            if (estado === ESTADO_INICIO || estado === ESTADO_FIN) {
+                juegoNuevo();
+            }
+        });
+
         juegoNuevo();
+        cambiarEstado(ESTADO_INICIO);
 
         document.addEventListener("keydown", teclaAbajo);
         document.addEventListener("keyup", teclaArriba);
-        setInterval(actualizar, 1000 / FPS);
+        document.addEventListener("visibilitychange", function() {
+            // Se reinicia la marca temporal para que dt no salte al volver
+            ultimaMarcaFrame = null;
+        });
+        requestAnimationFrame(bucleJuego);
 
         function juegoNuevo() {
             nivel = 0;
@@ -379,7 +514,7 @@
             puntuacion = 0;
             nave = nuevaNave();
 
-            var puntuacionStr = localStorage.getItem(CLAVE_GUARDAR_PUNTUACION);
+            var puntuacionStr = leerClaveLocal(CLAVE_GUARDAR_PUNTUACION);
             if (puntuacionStr == null) {
                 puntuacionAlta = 0;
             } else {
@@ -387,6 +522,9 @@
             }
 
             nivelNuevo();
+            musica.tiempoLatido = 0;
+            ultimaMarcaFrame = null;
+            cambiarEstado(ESTADO_JUGANDO);
         }
 
         function nivelNuevo() {
@@ -403,7 +541,7 @@
                 a: 90 / 180 * Math.PI,
                 r: TAM_NAVE / 2,
                 numParpadeos: Math.ceil(DUR_INV_NAVE / DUR_PARPADEO_NAVE),
-                tiempoParpadeo: Math.ceil(DUR_PARPADEO_NAVE * FPS),
+                tiempoParpadeo: DUR_PARPADEO_NAVE * FPS,
                 puedeDisparar: true,
                 muerta: false,
                 tiempoExplosion: 0,
@@ -433,8 +571,8 @@
             var asteroide = {
                 x: x,
                 y: y,
-                xv: Math.random() * AST_VEL * multNivel / FPS * (Math.random() < 0.5 ? 1 : -1),
-                yv: Math.random() * AST_VEL * multNivel / FPS * (Math.random() < 0.5 ? 1 : -1),
+                xv: Math.random() * AST_VEL * multNivel * (Math.random() < 0.5 ? 1 : -1),
+                yv: Math.random() * AST_VEL * multNivel * (Math.random() < 0.5 ? 1 : -1),
                 a: Math.random() * Math.PI * 2,
                 r: r,
                 desplazamientos: [],
@@ -467,7 +605,7 @@
 
             if (puntuacion > puntuacionAlta) {
                 puntuacionAlta = puntuacion;
-                localStorage.setItem(CLAVE_GUARDAR_PUNTUACION, puntuacionAlta);
+                escribirClaveLocal(CLAVE_GUARDAR_PUNTUACION, puntuacionAlta);
             }
 
             asteroides.splice(index, 1);
@@ -487,8 +625,8 @@
                 nave.laseres.push({
                     x: nave.x + 4 / 3 * nave.r * Math.cos(nave.a),
                     y: nave.y - 4 / 3 * nave.r * Math.sin(nave.a),
-                    xv: VEL_LASER * Math.cos(nave.a) / FPS,
-                    yv: -VEL_LASER * Math.sin(nave.a) / FPS,
+                    xv: VEL_LASER * Math.cos(nave.a),
+                    yv: -VEL_LASER * Math.sin(nave.a),
                     dist: 0,
                     tiempoExplosion: 0
                 });
@@ -498,14 +636,16 @@
         }
 
         function explotarNave() {
-            nave.tiempoExplosion = Math.ceil(DUR_EXPLOSION_NAVE * FPS);
+            nave.tiempoExplosion = DUR_EXPLOSION_NAVE * FPS;
             fxExplosion.play();
         }
 
         function juegoTerminado() {
             nave.muerta = true;
-            texto = "Game Over";
+            texto = "FIN DEL JUEGO";
             alfaTexto = 1.0;
+            musica.pausar();
+            cambiarEstado(ESTADO_FIN);
         }
 
         function distanciaEntrePuntos(x1, y1, x2, y2) {
@@ -513,43 +653,114 @@
         }
 
         function teclaAbajo(ev) {
-            if (nave.muerta) {
+            if (ev.code === "Enter") {
+                if (estado === ESTADO_INICIO || estado === ESTADO_FIN) {
+                    juegoNuevo();
+                }
                 return;
             }
-            switch(ev.keyCode) {
-                case 32:
+            if (ev.code === "Escape" || ev.code === "KeyP") {
+                if (estado === ESTADO_JUGANDO || estado === ESTADO_PAUSA) {
+                    alternarPausa();
+                }
+                return;
+            }
+            if (estado !== ESTADO_JUGANDO || nave.muerta) {
+                return;
+            }
+            switch(ev.code) {
+                case "Space":
                     dispararLaser();
                     break;
-                case 37:
-                    nave.rot = VEL_GIRO_NAVE / 180 * Math.PI / FPS;
+                case "ArrowLeft":
+                    nave.rot = VEL_GIRO_NAVE / 180 * Math.PI;
                     break;
-                case 38:
+                case "ArrowUp":
                     nave.impulsando = true;
                     break;
-                case 39:
-                    nave.rot = -VEL_GIRO_NAVE / 180 * Math.PI / FPS;
+                case "ArrowRight":
+                    nave.rot = -VEL_GIRO_NAVE / 180 * Math.PI;
                     break;
             }
         }
 
         function teclaArriba(ev) {
-            if (nave.muerta) {
+            if (ev.code === "Escape" || ev.code === "KeyP" || ev.code === "Enter") {
                 return;
             }
-            switch(ev.keyCode) {
-                case 32:
+            if (estado !== ESTADO_JUGANDO || nave.muerta) {
+                return;
+            }
+            switch(ev.code) {
+                case "Space":
                     nave.puedeDisparar = true;
                     break;
-                case 37:
+                case "ArrowLeft":
                     nave.rot = 0;
                     break;
-                case 38:
+                case "ArrowUp":
                     nave.impulsando = false;
                     break;
-                case 39:
+                case "ArrowRight":
                     nave.rot = 0;
                     break;
             }
+        }
+
+        function alternarPausa() {
+            if (estado === ESTADO_JUGANDO) {
+                cambiarEstado(ESTADO_PAUSA);
+                musica.pausar();
+            } else if (estado === ESTADO_PAUSA) {
+                ultimaMarcaFrame = null;
+                cambiarEstado(ESTADO_JUGANDO);
+            }
+        }
+
+        function cambiarEstado(nuevoEstado) {
+            estado = nuevoEstado;
+            var overlayInicio = document.getElementById("overlayInicio");
+            var overlayPausa = document.getElementById("overlayPausa");
+            var overlayFin = document.getElementById("overlayFin");
+
+            overlayInicio.classList.toggle("visible", estado === ESTADO_INICIO);
+            overlayPausa.classList.toggle("visible", estado === ESTADO_PAUSA);
+            overlayFin.classList.toggle("visible", estado === ESTADO_FIN);
+
+            if (estado === ESTADO_FIN) {
+                document.getElementById("finPuntuacion").textContent = "Puntuación: " + puntuacion;
+                document.getElementById("finRecord").textContent = "Récord: " + puntuacionAlta;
+            }
+        }
+
+        function bucleJuego(marca) {
+            if (ultimaMarcaFrame === null) {
+                // Primer frame (o tras pausar/volver a la pestaña): no calcular dt
+                ultimaMarcaFrame = marca;
+                requestAnimationFrame(bucleJuego);
+                return;
+            }
+
+            var dt = (marca - ultimaMarcaFrame) / 1000;
+            ultimaMarcaFrame = marca;
+            if (dt > DT_MAXIMO) {
+                dt = DT_MAXIMO;
+            } else if (dt < 0) {
+                dt = 0;
+            }
+
+            var escala = dt * FPS; // "frames equivalentes" del dt transcurrido
+
+            if (estado === ESTADO_JUGANDO) {
+                actualizar(escala);
+            } else if (estado === ESTADO_INICIO) {
+                // Fondo quieto mientras espera a empezar
+                ctx.fillStyle = "black";
+                ctx.fillRect(0, 0, lienzo.width, lienzo.height);
+            }
+            // En pausa/fin el canvas se congela en el último fotograma
+
+            requestAnimationFrame(bucleJuego);
         }
 
         function dibujarNave(x, y, a, color = "white") {
@@ -572,11 +783,12 @@
             ctx.stroke();
         }
 
-        function actualizar() {
+        function actualizar(escala) {
+            var dt = escala / FPS; // segundos transcurridos en este frame
             var parpadeando = nave.numParpadeos % 2 == 0;
             var explotando = nave.tiempoExplosion > 0;
 
-            musica.tick();
+            musica.tick(escala);
 
             ctx.fillStyle = "black";
             ctx.fillRect(0, 0, lienzo.width, lienzo.height);
@@ -617,8 +829,8 @@
             }
             
             if (nave.impulsando && !nave.muerta) {
-                nave.empuje.x += EMPUJE_NAVE * Math.cos(nave.a) / FPS;
-                nave.empuje.y -= EMPUJE_NAVE * Math.sin(nave.a) / FPS;
+                nave.empuje.x += EMPUJE_NAVE * Math.cos(nave.a) * dt;
+                nave.empuje.y -= EMPUJE_NAVE * Math.sin(nave.a) * dt;
                 fxEmpuje.play();
 
                 if (!explotando && parpadeando) {
@@ -643,8 +855,8 @@
                     ctx.stroke();
                 }
             } else {
-                nave.empuje.x -= FRICCION * nave.empuje.x / FPS;
-                nave.empuje.y -= FRICCION * nave.empuje.y / FPS;
+                nave.empuje.x -= FRICCION * nave.empuje.x * dt;
+                nave.empuje.y -= FRICCION * nave.empuje.y * dt;
                 fxEmpuje.stop();
             }
             
@@ -654,10 +866,10 @@
                 }
 
                 if (nave.numParpadeos > 0) {
-                    nave.tiempoParpadeo--;
+                    nave.tiempoParpadeo -= escala;
 
-                    if (nave.tiempoParpadeo == 0) {
-                        nave.tiempoParpadeo = Math.ceil(DUR_PARPADEO_NAVE * FPS);
+                    if (nave.tiempoParpadeo <= 0) {
+                        nave.tiempoParpadeo = DUR_PARPADEO_NAVE * FPS;
                         nave.numParpadeos--;
                     }
                 }
@@ -724,9 +936,7 @@
                 ctx.fillStyle = "rgba(255, 255, 255, " + alfaTexto + ")";
                 ctx.font = "small-caps " + TAM_TEXTO + "px dejavu sans mono";
                 ctx.fillText(texto, lienzo.width / 2, lienzo.height * 0.75);
-                alfaTexto -= (1.0 / TIEMPO_DESVANECIMIENTO_TEXTO / FPS);
-            } else if (nave.muerta) {
-                juegoNuevo();
+                alfaTexto -= (1.0 / TIEMPO_DESVANECIMIENTO_TEXTO / FPS) * escala;
             }
 
             var colorVida;
@@ -759,7 +969,7 @@
 
                     if (nave.laseres[j].tiempoExplosion == 0 && distanciaEntrePuntos(ax, ay, lx, ly) < ar) {
                         destruirAsteroide(i);
-                        nave.laseres[j].tiempoExplosion = Math.ceil(DUR_EXPLOSION_LASER * FPS);
+                        nave.laseres[j].tiempoExplosion = DUR_EXPLOSION_LASER * FPS;
                         break;
                     }
                 }
@@ -776,12 +986,12 @@
                     }
                 }
 
-                nave.a += nave.rot;
-                nave.x += nave.empuje.x;
-                nave.y += nave.empuje.y;
+                nave.a += nave.rot * dt;
+                nave.x += nave.empuje.x * dt;
+                nave.y += nave.empuje.y * dt;
             } else {
-                nave.tiempoExplosion--;
-                if (nave.tiempoExplosion == 0) {
+                nave.tiempoExplosion -= escala;
+                if (nave.tiempoExplosion <= 0) {
                     vidas--;
                     if (vidas == 0) {
                         juegoTerminado();
@@ -809,15 +1019,15 @@
                 }
 
                 if (nave.laseres[i].tiempoExplosion > 0) {
-                    nave.laseres[i].tiempoExplosion--;
-                    if (nave.laseres[i].tiempoExplosion == 0) {
+                    nave.laseres[i].tiempoExplosion -= escala;
+                    if (nave.laseres[i].tiempoExplosion <= 0) {
                         nave.laseres.splice(i, 1);
                         continue;
                     }
                 } else {
-                    nave.laseres[i].x += nave.laseres[i].xv;
-                    nave.laseres[i].y += nave.laseres[i].yv;
-                    nave.laseres[i].dist += Math.sqrt(Math.pow(nave.laseres[i].xv, 2) + Math.pow(nave.laseres[i].yv, 2));
+                    nave.laseres[i].x += nave.laseres[i].xv * dt;
+                    nave.laseres[i].y += nave.laseres[i].yv * dt;
+                    nave.laseres[i].dist += Math.sqrt(Math.pow(nave.laseres[i].xv, 2) + Math.pow(nave.laseres[i].yv, 2)) * dt;
                 }
 
                 if (nave.laseres[i].x < 0 || nave.laseres[i].x > lienzo.width || nave.laseres[i].y < 0 || nave.laseres[i].y > lienzo.height) {
@@ -827,8 +1037,8 @@
             }
 
             for (var i = 0; i < asteroides.length; i++) {
-                asteroides[i].x += asteroides[i].xv;
-                asteroides[i].y += asteroides[i].yv;
+                asteroides[i].x += asteroides[i].xv * dt;
+                asteroides[i].y += asteroides[i].yv * dt;
 
                 if (asteroides[i].x < asteroides[i].r) {
                     asteroides[i].x = asteroides[i].r;
